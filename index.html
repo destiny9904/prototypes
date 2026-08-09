@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>미니 게임 아케이드</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: radial-gradient(circle at 20% 20%, #2b2f77, #0d0e21 70%);
+    color: #fff;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 40px 20px;
+  }
+  header { text-align: center; margin-bottom: 40px; }
+  h1 {
+    font-size: 2.6rem;
+    background: linear-gradient(90deg, #ffd54f, #ff7043, #29b6f6, #66bb6a);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  header p { margin-top: 10px; color: #cfd2f0; font-size: 1rem; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 24px;
+    max-width: 1000px;
+    width: 100%;
+  }
+  .card {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 16px;
+    padding: 28px 22px;
+    text-decoration: none;
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    transition: transform .2s ease, background .2s ease, box-shadow .2s ease;
+  }
+  .card:hover {
+    transform: translateY(-6px);
+    background: rgba(255,255,255,0.12);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+  }
+  .icon { font-size: 2.4rem; }
+  .card h2 { font-size: 1.3rem; }
+  .card p { color: #cfd2f0; font-size: 0.9rem; line-height: 1.4; }
+  .tag {
+    align-self: flex-start;
+    font-size: 0.7rem;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.15);
+    color: #ffe082;
+  }
+  footer { margin-top: 50px; color: #8a8dc0; font-size: 0.8rem; text-align: center; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>🎮 미니 게임 아케이드</h1>
+    <p>브라우저에서 바로 즐기는 4가지 미니 게임 — 설치 없이, 클릭 한 번으로</p>
+  </header>
+
+  <main class="grid">
+    <a class="card" href="games/driving/index.html">
+      <span class="icon">🚗</span>
+      <h2>오픈월드 드라이빙</h2>
+      <p>넓은 맵을 자유롭게 달리며 체크포인트를 모으고 장애물을 피하세요.</p>
+      <span class="tag">방향키 조작</span>
+    </a>
+
+    <a class="card" href="games/baseball/index.html">
+      <span class="icon">⚾</span>
+      <h2>타격 연습 야구</h2>
+      <p>타이밍에 맞춰 스윙하고 안타와 홈런을 노려보세요. 3아웃 전에 최대한 득점!</p>
+      <span class="tag">스페이스바 스윙</span>
+    </a>
+
+    <a class="card" href="games/soccer/index.html">
+      <span class="icon">⚽</span>
+      <h2>1인 축구 매치</h2>
+      <p>AI 수비수와 골키퍼를 뚫고 60초 안에 최대한 많은 골을 넣어보세요.</p>
+      <span class="tag">방향키 + 스페이스</span>
+    </a>
+
+    <a class="card" href="games/rpg/index.html">
+      <span class="icon">🗡️</span>
+      <h2>미니 RPG 모험</h2>
+      <p>필드를 탐험하다 만나는 몬스터와 턴제 전투를 벌이고 레벨업하세요.</p>
+      <span class="tag">방향키 이동</span>
+    </a>
+  </main>
+
+  <footer>
+    <p>Made with HTML5 Canvas · GitHub Pages로 배포 가능</p>
+  </footer>
+</body>
+</html>
