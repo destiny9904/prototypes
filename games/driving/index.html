@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>오픈월드 드라이빙</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#111; font-family: system-ui, sans-serif; }
+  canvas { display:block; background:#4caf50; }
+  #hud {
+    position:fixed; top:14px; left:14px; color:#fff; text-shadow:0 1px 3px rgba(0,0,0,0.6);
+    font-size:16px; line-height:1.5; z-index:5; pointer-events:none;
+  }
+  #hud .big { font-size:22px; font-weight:bold; }
+  #back {
+    position:fixed; top:14px; right:14px; z-index:5;
+    background:rgba(0,0,0,0.5); color:#fff; border:1px solid rgba(255,255,255,0.4);
+    padding:8px 14px; border-radius:8px; text-decoration:none; font-size:14px;
+  }
+  #minimap {
+    position:fixed; bottom:14px; right:14px; width:150px; height:150px;
+    background:rgba(0,0,0,0.4); border:2px solid rgba(255,255,255,0.5); border-radius:8px; z-index:5;
+  }
+  #overlay {
+    position:fixed; inset:0; background:rgba(0,0,0,0.75); color:#fff;
+    display:none; align-items:center; justify-content:center; flex-direction:column; z-index:10;
+    text-align:center; gap:16px;
+  }
+  #overlay h2 { font-size:2rem; }
+  #overlay button {
+    padding:12px 26px; font-size:1rem; border:none; border-radius:8px; cursor:pointer;
+    background:#ffca28; font-weight:bold;
+  }
+  #instructions {
+    position:fixed; bottom:14px; left:14px; color:#fff; font-size:13px; z-index:5;
+    background:rgba(0,0,0,0.4); padding:8px 12px; border-radius:8px; line-height:1.5;
+  }
+</style>
+</head>
+<body>
+<a id="back" href="../../index.html">← 허브로</a>
+<div id="hud">
+  <div class="big">⏱ <span id="time">90</span>s</div>
+  <div>🚩 체크포인트: <span id="score">0</span></div>
+  <div>🚀 속도: <span id="speed">0</span> km/h</div>
+</div>
+<div id="instructions">방향키 / WASD: 운전 &nbsp; (↑가속 ↓후진 ←→회전)</div>
+<canvas id="minimap"></canvas>
+<canvas id="game"></canvas>
+
+<div id="overlay">
+  <h2>게임 종료!</h2>
+  <p id="finalScore" style="font-size:1.3rem;"></p>
+  <button id="restartBtn">다시 하기</button>
+</div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const mini = document.getElementById('minimap');
+  const mctx = mini.getContext('2d');
+
+  function resize(){
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    mini.width = 150; mini.height = 150;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  const WORLD = { w: 3200, h: 3200 };
+  const ROAD_SPACING = 420;
+  const ROAD_WIDTH = 110;
+
+  let keys = {};
+  window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; });
+  window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+  function rand(min, max){ return Math.random() * (max - min) + min; }
+
+  function isOnRoad(x, y){
+    const mx = ((x % ROAD_SPACING) + ROAD_SPACING) % ROAD_SPACING;
+    const my = ((y % ROAD_SPACING) + ROAD_SPACING) % ROAD_SPACING;
+    return mx < ROAD_WIDTH || my < ROAD_WIDTH;
+  }
+
+  // obstacles (trees / rocks), avoid roads
+  const obstacles = [];
+  while (obstacles.length < 140) {
+    const x = rand(0, WORLD.w);
+    const y = rand(0, WORLD.h);
+    if (isOnRoad(x, y)) continue;
+    obstacles.push({ x, y, r: rand(14, 26), type: Math.random() < 0.7 ? 'tree' : 'rock' });
+  }
+
+  function randomCheckpointPos(){
+    let x, y, tries = 0;
+    do {
+      x = rand(100, WORLD.w - 100);
+      y = rand(100, WORLD.h - 100);
+      tries++;
+    } while (tries < 30 && obstacles.some(o => Math.hypot(o.x - x, o.y - y) < o.r + 60));
+    return { x, y };
+  }
+
+  let checkpoints = [];
+  for (let i = 0; i < 5; i++) {
+    const p = randomCheckpointPos();
+    checkpoints.push({ x: p.x, y: p.y, r: 28 });
+  }
+
+  const car = {
+    x: WORLD.w / 2,
+    y: WORLD.h / 2,
+    angle: 0,
+    speed: 0,
+    maxSpeed: 520,
+    accel: 320,
+    brake: 420,
+    friction: 160,
+    turnSpeed: 2.6,
+    w: 26,
+    h: 46
+  };
+
+  let score = 0;
+  let timeLeft = 90;
+  let gameOver = false;
+
+  const scoreEl = document.getElementById('score');
+  const speedEl = document.getElementById('speed');
+  const timeEl = document.getElementById('time');
+  const overlay = document.getElementById('overlay');
+  const finalScoreEl = document.getElementById('finalScore');
+
+  function update(dt){
+    if (gameOver) return;
+
+    const accelPressed = keys['arrowup'] || keys['w'];
+    const brakePressed = keys['arrowdown'] || keys['s'];
+    const left = keys['arrowleft'] || keys['a'];
+    const right = keys['arrowright'] || keys['d'];
+
+    if (accelPressed) {
+      car.speed += car.accel * dt;
+    } else if (brakePressed) {
+      car.speed -= car.brake * dt;
+    } else {
+      const sign = Math.sign(car.speed);
+      car.speed -= sign * car.friction * dt;
+      if (Math.sign(car.speed) !== sign) car.speed = 0;
+    }
+    car.speed = Math.max(-car.maxSpeed * 0.5, Math.min(car.maxSpeed, car.speed));
+
+    const turnFactor = Math.min(1, Math.abs(car.speed) / 120);
+    if (left) car.angle -= car.turnSpeed * dt * turnFactor * (car.speed < 0 ? -1 : 1);
+    if (right) car.angle += car.turnSpeed * dt * turnFactor * (car.speed < 0 ? -1 : 1);
+
+    car.x += Math.sin(car.angle) * car.speed * dt;
+    car.y -= Math.cos(car.angle) * car.speed * dt;
+
+    car.x = Math.max(0, Math.min(WORLD.w, car.x));
+    car.y = Math.max(0, Math.min(WORLD.h, car.y));
+
+    // collisions with obstacles
+    for (const o of obstacles) {
+      const dx = car.x - o.x, dy = car.y - o.y;
+      const dist = Math.hypot(dx, dy);
+      const minDist = o.r + 18;
+      if (dist < minDist && dist > 0) {
+        const nx = dx / dist, ny = dy / dist;
+        car.x = o.x + nx * minDist;
+        car.y = o.y + ny * minDist;
+        car.speed *= -0.4;
+      }
+    }
+
+    // checkpoints
+    for (const cp of checkpoints) {
+      const dist = Math.hypot(car.x - cp.x, car.y - cp.y);
+      if (dist < cp.r + 16) {
+        score++;
+        const p = randomCheckpointPos();
+        cp.x = p.x; cp.y = p.y;
+      }
+    }
+
+    timeLeft -= dt;
+    if (timeLeft <= 0) {
+      timeLeft = 0;
+      endGame();
+    }
+
+    scoreEl.textContent = score;
+    speedEl.textContent = Math.max(0, Math.round(Math.abs(car.speed) * 0.6));
+    timeEl.textContent = Math.ceil(timeLeft);
+  }
+
+  function endGame(){
+    gameOver = true;
+    finalScoreEl.textContent = `획득한 체크포인트: ${score}개`;
+    overlay.style.display = 'flex';
+  }
+
+  function drawWorld(camX, camY){
+    ctx.fillStyle = '#4caf50';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // subtle grass texture grid
+    ctx.strokeStyle = 'rgba(0,0,0,0.05)';
+    for (let gx = -((camX) % 80); gx < canvas.width; gx += 80) {
+      ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, canvas.height); ctx.stroke();
+    }
+    for (let gy = -((camY) % 80); gy < canvas.height; gy += 80) {
+      ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(canvas.width, gy); ctx.stroke();
+    }
+
+    // roads
+    ctx.fillStyle = '#555b63';
+    const startX = Math.floor(camX / ROAD_SPACING) * ROAD_SPACING;
+    const startY = Math.floor(camY / ROAD_SPACING) * ROAD_SPACING;
+    for (let rx = startX; rx < camX + canvas.width + ROAD_SPACING; rx += ROAD_SPACING) {
+      ctx.fillRect(rx - camX, 0, ROAD_WIDTH, canvas.height);
+    }
+    for (let ry = startY; ry < camY + canvas.height + ROAD_SPACING; ry += ROAD_SPACING) {
+      ctx.fillRect(0, ry - camY, canvas.width, ROAD_WIDTH);
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.setLineDash([16, 14]);
+    ctx.lineWidth = 3;
+    for (let rx = startX; rx < camX + canvas.width + ROAD_SPACING; rx += ROAD_SPACING) {
+      ctx.beginPath(); ctx.moveTo(rx - camX + ROAD_WIDTH/2, 0); ctx.lineTo(rx - camX + ROAD_WIDTH/2, canvas.height); ctx.stroke();
+    }
+    for (let ry = startY; ry < camY + canvas.height + ROAD_SPACING; ry += ROAD_SPACING) {
+      ctx.beginPath(); ctx.moveTo(0, ry - camY + ROAD_WIDTH/2); ctx.lineTo(canvas.width, ry - camY + ROAD_WIDTH/2); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // obstacles
+    for (const o of obstacles) {
+      const sx = o.x - camX, sy = o.y - camY;
+      if (sx < -50 || sx > canvas.width + 50 || sy < -50 || sy > canvas.height + 50) continue;
+      if (o.type === 'tree') {
+        ctx.fillStyle = '#5d4037';
+        ctx.fillRect(sx - 3, sy - 4, 6, 14);
+        ctx.fillStyle = '#2e7d32';
+        ctx.beginPath(); ctx.arc(sx, sy - 10, o.r, 0, Math.PI * 2); ctx.fill();
+      } else {
+        ctx.fillStyle = '#78909c';
+        ctx.beginPath(); ctx.ellipse(sx, sy, o.r, o.r * 0.8, 0, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+
+    // checkpoints
+    for (const cp of checkpoints) {
+      const sx = cp.x - camX, sy = cp.y - camY;
+      ctx.save();
+      ctx.translate(sx, sy);
+      ctx.strokeStyle = '#ffca28';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(0, 0, cp.r, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = '#ffca28';
+      ctx.beginPath();
+      ctx.moveTo(0, -cp.r);
+      ctx.lineTo(0, -cp.r + 26);
+      ctx.moveTo(0, -cp.r + 2);
+      ctx.lineTo(14, -cp.r + 8);
+      ctx.lineTo(0, -cp.r + 14);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  function drawCar(camX, camY){
+    const sx = car.x - camX, sy = car.y - camY;
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(car.angle);
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.fillRect(-car.w/2 + 2, -car.h/2 + 4, car.w, car.h);
+    ctx.fillStyle = '#e53935';
+    ctx.fillRect(-car.w/2, -car.h/2, car.w, car.h);
+    ctx.fillStyle = '#90caf9';
+    ctx.fillRect(-car.w/2 + 4, -car.h/2 + 6, car.w - 8, 12);
+    ctx.fillStyle = '#212121';
+    ctx.fillRect(-car.w/2 - 2, -car.h/2 + 4, 4, 10);
+    ctx.fillRect(car.w/2 - 2, -car.h/2 + 4, 4, 10);
+    ctx.fillRect(-car.w/2 - 2, car.h/2 - 14, 4, 10);
+    ctx.fillRect(car.w/2 - 2, car.h/2 - 14, 4, 10);
+    ctx.restore();
+  }
+
+  function drawMinimap(){
+    mctx.clearRect(0, 0, mini.width, mini.height);
+    mctx.fillStyle = 'rgba(76,175,80,0.5)';
+    mctx.fillRect(0, 0, mini.width, mini.height);
+    const scaleX = mini.width / WORLD.w;
+    const scaleY = mini.height / WORLD.h;
+    mctx.fillStyle = '#ffca28';
+    for (const cp of checkpoints) {
+      mctx.beginPath();
+      mctx.arc(cp.x * scaleX, cp.y * scaleY, 3, 0, Math.PI * 2);
+      mctx.fill();
+    }
+    mctx.fillStyle = '#e53935';
+    mctx.beginPath();
+    mctx.arc(car.x * scaleX, car.y * scaleY, 4, 0, Math.PI * 2);
+    mctx.fill();
+  }
+
+  let last = performance.now();
+  function loop(now){
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    update(dt);
+
+    const camX = Math.max(0, Math.min(WORLD.w - canvas.width, car.x - canvas.width / 2));
+    const camY = Math.max(0, Math.min(WORLD.h - canvas.height, car.y - canvas.height / 2));
+
+    drawWorld(camX, camY);
+    drawCar(camX, camY);
+    drawMinimap();
+
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  document.getElementById('restartBtn').addEventListener('click', () => {
+    score = 0;
+    timeLeft = 90;
+    gameOver = false;
+    car.x = WORLD.w / 2; car.y = WORLD.h / 2; car.angle = 0; car.speed = 0;
+    checkpoints.forEach(cp => { const p = randomCheckpointPos(); cp.x = p.x; cp.y = p.y; });
+    overlay.style.display = 'none';
+  });
+})();
+</script>
+</body>
+</html>

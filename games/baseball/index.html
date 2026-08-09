@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>타격 연습 야구</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#0d3b1e; font-family: system-ui, sans-serif; }
+  canvas { display:block; margin:0 auto; background:#1b5e20; }
+  #wrap { position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; }
+  #hud {
+    position:fixed; top:14px; left:14px; color:#fff; text-shadow:0 1px 3px rgba(0,0,0,0.7);
+    font-size:16px; line-height:1.6; z-index:5;
+  }
+  #hud .big { font-size:24px; font-weight:bold; }
+  #back {
+    position:fixed; top:14px; right:14px; z-index:5;
+    background:rgba(0,0,0,0.5); color:#fff; border:1px solid rgba(255,255,255,0.4);
+    padding:8px 14px; border-radius:8px; text-decoration:none; font-size:14px;
+  }
+  #message {
+    position:fixed; top:50%; left:50%; transform:translate(-50%, -160%);
+    font-size:2.2rem; font-weight:bold; color:#fff; text-shadow:0 2px 6px rgba(0,0,0,0.7);
+    z-index:6; pointer-events:none; opacity:0; transition:opacity .15s;
+  }
+  #swingBtn {
+    position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
+    padding:16px 40px; font-size:1.1rem; font-weight:bold; border:none; border-radius:12px;
+    background:#ffca28; cursor:pointer; z-index:5;
+  }
+  #instructions {
+    position:fixed; bottom:90px; left:50%; transform:translateX(-50%); color:#fff; font-size:13px;
+    background:rgba(0,0,0,0.4); padding:6px 14px; border-radius:8px; z-index:5;
+  }
+  #overlay {
+    position:fixed; inset:0; background:rgba(0,0,0,0.8); color:#fff;
+    display:none; align-items:center; justify-content:center; flex-direction:column; z-index:10;
+    text-align:center; gap:16px;
+  }
+  #overlay h2 { font-size:2rem; }
+  #overlay button {
+    padding:12px 26px; font-size:1rem; border:none; border-radius:8px; cursor:pointer;
+    background:#ffca28; font-weight:bold;
+  }
+</style>
+</head>
+<body>
+<a id="back" href="../../index.html">← 허브로</a>
+<div id="hud">
+  <div class="big">⚾ 점수: <span id="score">0</span></div>
+  <div>아웃: <span id="outs">0</span> / 3</div>
+  <div>볼: <span id="balls">0</span> · 스트라이크: <span id="strikes">0</span></div>
+</div>
+<div id="message"></div>
+<div id="instructions">스페이스바 또는 아래 버튼으로 스윙! 타이밍이 핵심입니다.</div>
+<button id="swingBtn">SWING</button>
+
+<div id="wrap"><canvas id="game" width="900" height="520"></canvas></div>
+
+<div id="overlay">
+  <h2>게임 종료!</h2>
+  <p id="finalScore" style="font-size:1.3rem;"></p>
+  <button id="restartBtn">다시 하기</button>
+</div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  const batterX = 150;
+  const pitcherX = W - 100;
+  const laneY = H / 2;
+  const hitWindow = 20;
+  const perfectWindow = 7;
+  const greatWindow = 13;
+
+  let score = 0, outs = 0, balls = 0, strikes = 0;
+  let gameOver = false;
+
+  let state = 'ready'; // ready -> pitching -> result
+  let pitch = null;
+  let resultTimer = 0;
+  let readyTimer = 0.6;
+
+  const scoreEl = document.getElementById('score');
+  const outsEl = document.getElementById('outs');
+  const ballsEl = document.getElementById('balls');
+  const strikesEl = document.getElementById('strikes');
+  const messageEl = document.getElementById('message');
+  const overlay = document.getElementById('overlay');
+  const finalScoreEl = document.getElementById('finalScore');
+
+  function rand(min, max){ return Math.random() * (max - min) + min; }
+
+  function showMessage(text, color){
+    messageEl.textContent = text;
+    messageEl.style.color = color || '#fff';
+    messageEl.style.opacity = '1';
+    clearTimeout(showMessage._t);
+    showMessage._t = setTimeout(() => { messageEl.style.opacity = '0'; }, 700);
+  }
+
+  function startPitch(){
+    const duration = rand(0.75, 1.15);
+    const isStrike = Math.random() < 0.62;
+    const zoneOffset = isStrike ? rand(-18, 18) : (Math.random() < 0.5 ? rand(-70, -35) : rand(35, 70));
+    pitch = {
+      x: pitcherX,
+      startX: pitcherX,
+      duration,
+      elapsed: 0,
+      isStrike,
+      yOffset: zoneOffset,
+      resolved: false
+    };
+    state = 'pitching';
+  }
+
+  function resolveNoSwing(){
+    if (pitch.isStrike) {
+      strikes++;
+      showMessage('스트라이크!', '#ff7043');
+    } else {
+      balls++;
+      showMessage('볼', '#4fc3f7');
+    }
+    afterPitch();
+  }
+
+  function swing(){
+    if (state !== 'pitching' || !pitch || pitch.resolved) return;
+    pitch.resolved = true;
+    const dist = Math.abs(pitch.x - batterX);
+    if (dist > hitWindow) {
+      strikes++;
+      showMessage('헛스윙!', '#ff7043');
+    } else if (dist <= perfectWindow) {
+      score += 4;
+      showMessage('홈런! +4', '#ffd54f');
+    } else if (dist <= greatWindow) {
+      const gain = Math.random() < 0.5 ? 3 : 2;
+      score += gain;
+      showMessage(gain === 3 ? '3루타! +3' : '2루타! +2', '#aed581');
+    } else {
+      score += 1;
+      showMessage('안타! +1', '#aed581');
+    }
+    afterPitch();
+  }
+
+  function afterPitch(){
+    if (strikes >= 3) {
+      outs++; strikes = 0; balls = 0;
+      if (outs >= 3) {
+        endGame();
+        return;
+      }
+    }
+    if (balls >= 4) {
+      balls = 0; strikes = 0;
+      score += 1;
+      showMessage('볼넷! +1', '#4fc3f7');
+    }
+    state = 'result';
+    resultTimer = 0.6;
+    updateHud();
+  }
+
+  function updateHud(){
+    scoreEl.textContent = score;
+    outsEl.textContent = outs;
+    ballsEl.textContent = balls;
+    strikesEl.textContent = strikes;
+  }
+
+  function endGame(){
+    gameOver = true;
+    finalScoreEl.textContent = `최종 점수: ${score}점`;
+    overlay.style.display = 'flex';
+    updateHud();
+  }
+
+  function update(dt){
+    if (gameOver) return;
+
+    if (state === 'ready') {
+      readyTimer -= dt;
+      if (readyTimer <= 0) startPitch();
+    } else if (state === 'pitching') {
+      pitch.elapsed += dt;
+      const t = Math.min(1, pitch.elapsed / pitch.duration);
+      pitch.x = pitch.startX + (batterX - 40 - pitch.startX) * t;
+      if (t >= 1 && !pitch.resolved) {
+        pitch.resolved = true;
+        resolveNoSwing();
+      }
+    } else if (state === 'result') {
+      resultTimer -= dt;
+      if (resultTimer <= 0) {
+        readyTimer = 0.5;
+        state = 'ready';
+      }
+    }
+  }
+
+  function draw(){
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#1b5e20';
+    ctx.fillRect(0, 0, W, H);
+
+    // dirt diamond-ish backdrop
+    ctx.fillStyle = '#8d6e63';
+    ctx.beginPath();
+    ctx.ellipse(batterX - 30, laneY + 40, 90, 60, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // pitcher mound
+    ctx.fillStyle = '#a1887f';
+    ctx.beginPath();
+    ctx.ellipse(pitcherX, laneY, 40, 26, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // strike zone box
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(batterX - 45, laneY - 55, 90, 110);
+
+    // batter
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(batterX - 6, laneY - 30, 12, 60);
+    ctx.beginPath();
+    ctx.arc(batterX, laneY - 40, 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#5d4037';
+    ctx.save();
+    ctx.translate(batterX + 8, laneY);
+    ctx.rotate(-0.4);
+    ctx.fillRect(0, -3, 46, 6);
+    ctx.restore();
+
+    // ball
+    if (pitch && (state === 'pitching')) {
+      const by = laneY + pitch.yOffset * (pitch.elapsed / pitch.duration);
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(pitch.x, by, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#e53935';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(pitch.x, by, 8, 0.3, 2.2); ctx.stroke();
+    }
+
+    // hit window guide near batter
+    ctx.strokeStyle = 'rgba(255,202,40,0.7)';
+    ctx.setLineDash([4,4]);
+    ctx.beginPath();
+    ctx.moveTo(batterX - hitWindow - 40, laneY - 60);
+    ctx.lineTo(batterX - hitWindow - 40, laneY + 60);
+    ctx.moveTo(batterX + hitWindow - 40, laneY - 60);
+    ctx.lineTo(batterX + hitWindow - 40, laneY + 60);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  let last = performance.now();
+  function loop(now){
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  window.addEventListener('keydown', e => {
+    if (e.code === 'Space') { e.preventDefault(); swing(); }
+  });
+  document.getElementById('swingBtn').addEventListener('click', swing);
+
+  document.getElementById('restartBtn').addEventListener('click', () => {
+    score = 0; outs = 0; balls = 0; strikes = 0; gameOver = false;
+    state = 'ready'; readyTimer = 0.6; pitch = null;
+    overlay.style.display = 'none';
+    updateHud();
+  });
+
+  updateHud();
+})();
+</script>
+</body>
+</html>

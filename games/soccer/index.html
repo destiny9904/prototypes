@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>1인 축구 매치</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#0b3d1f; font-family: system-ui, sans-serif; }
+  #wrap { width:100%; height:100%; display:flex; align-items:center; justify-content:center; }
+  canvas { background:#2e7d32; display:block; }
+  #hud {
+    position:fixed; top:14px; left:14px; color:#fff; text-shadow:0 1px 3px rgba(0,0,0,0.7);
+    font-size:16px; line-height:1.6; z-index:5;
+  }
+  #hud .big { font-size:24px; font-weight:bold; }
+  #back {
+    position:fixed; top:14px; right:14px; z-index:5;
+    background:rgba(0,0,0,0.5); color:#fff; border:1px solid rgba(255,255,255,0.4);
+    padding:8px 14px; border-radius:8px; text-decoration:none; font-size:14px;
+  }
+  #instructions {
+    position:fixed; bottom:14px; left:50%; transform:translateX(-50%); color:#fff; font-size:13px;
+    background:rgba(0,0,0,0.4); padding:6px 14px; border-radius:8px; z-index:5;
+  }
+  #message {
+    position:fixed; top:40%; left:50%; transform:translate(-50%, -50%);
+    font-size:2.4rem; font-weight:bold; color:#fff; text-shadow:0 2px 6px rgba(0,0,0,0.7);
+    z-index:6; pointer-events:none; opacity:0; transition:opacity .15s;
+  }
+  #overlay {
+    position:fixed; inset:0; background:rgba(0,0,0,0.8); color:#fff;
+    display:none; align-items:center; justify-content:center; flex-direction:column; z-index:10;
+    text-align:center; gap:16px;
+  }
+  #overlay h2 { font-size:2rem; }
+  #overlay button {
+    padding:12px 26px; font-size:1rem; border:none; border-radius:8px; cursor:pointer;
+    background:#ffca28; font-weight:bold;
+  }
+</style>
+</head>
+<body>
+<a id="back" href="../../index.html">← 허브로</a>
+<div id="hud">
+  <div class="big">⚽ 골: <span id="score">0</span></div>
+  <div>⏱ 남은 시간: <span id="time">60</span>s</div>
+</div>
+<div id="message"></div>
+<div id="instructions">방향키/WASD: 이동 · 스페이스바: 슛/패스</div>
+
+<div id="wrap"><canvas id="game" width="900" height="560"></canvas></div>
+
+<div id="overlay">
+  <h2>경기 종료!</h2>
+  <p id="finalScore" style="font-size:1.3rem;"></p>
+  <button id="restartBtn">다시 하기</button>
+</div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  const GOAL_HALF = 70;
+  const GOAL_X = W - 22;
+
+  let keys = {};
+  window.addEventListener('keydown', e => {
+    keys[e.key.toLowerCase()] = true;
+    if (e.code === 'Space') e.preventDefault();
+  });
+  window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+  function rand(min, max){ return Math.random() * (max - min) + min; }
+  function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+
+  const player = { x: 160, y: H/2, r: 14, speed: 240, facing: 0 };
+  const ball = { x: 220, y: H/2, r: 9, vx: 0, vy: 0 };
+  const defender = { x: W/2 + 60, y: H/2 - 80, r: 15, speed: 150 };
+  const goalie = { x: GOAL_X - 20, y: H/2, r: 15, speed: 220 };
+
+  let score = 0;
+  let timeLeft = 60;
+  let gameOver = false;
+  let messageTimer = 0;
+
+  const scoreEl = document.getElementById('score');
+  const timeEl = document.getElementById('time');
+  const messageEl = document.getElementById('message');
+  const overlay = document.getElementById('overlay');
+  const finalScoreEl = document.getElementById('finalScore');
+
+  function showMessage(text, color){
+    messageEl.textContent = text;
+    messageEl.style.color = color || '#fff';
+    messageEl.style.opacity = '1';
+    clearTimeout(showMessage._t);
+    showMessage._t = setTimeout(() => { messageEl.style.opacity = '0'; }, 900);
+  }
+
+  function resetPositions(scored){
+    player.x = 160; player.y = H/2;
+    ball.x = 220; ball.y = H/2; ball.vx = 0; ball.vy = 0;
+    defender.x = W/2 + rand(20,80); defender.y = rand(100, H-100);
+    goalie.x = GOAL_X - 20; goalie.y = H/2;
+  }
+
+  function update(dt){
+    if (gameOver) return;
+
+    let dx = 0, dy = 0;
+    if (keys['arrowup'] || keys['w']) dy -= 1;
+    if (keys['arrowdown'] || keys['s']) dy += 1;
+    if (keys['arrowleft'] || keys['a']) dx -= 1;
+    if (keys['arrowright'] || keys['d']) dx += 1;
+    const len = Math.hypot(dx, dy);
+    if (len > 0) {
+      dx /= len; dy /= len;
+      player.facing = Math.atan2(dy, dx);
+      player.x += dx * player.speed * dt;
+      player.y += dy * player.speed * dt;
+    }
+    player.x = clamp(player.x, player.r, W - player.r);
+    player.y = clamp(player.y, player.r, H - player.r);
+
+    // dribble: if ball close to player and slow, it sticks slightly ahead of player
+    const pdist = Math.hypot(ball.x - player.x, ball.y - player.y);
+    const possessing = pdist < player.r + ball.r + 10;
+    if (possessing) {
+      const targetX = player.x + Math.cos(player.facing) * (player.r + ball.r + 4);
+      const targetY = player.y + Math.sin(player.facing) * (player.r + ball.r + 4);
+      ball.x += (targetX - ball.x) * Math.min(1, dt * 10);
+      ball.y += (targetY - ball.y) * Math.min(1, dt * 10);
+      ball.vx = 0; ball.vy = 0;
+
+      if (keys[' '] || keys['space']) {
+        ball.vx = Math.cos(player.facing) * 520;
+        ball.vy = Math.sin(player.facing) * 520;
+      }
+    } else {
+      ball.x += ball.vx * dt;
+      ball.y += ball.vy * dt;
+      ball.vx *= 0.985;
+      ball.vy *= 0.985;
+    }
+
+    // ball bounds
+    if (ball.y < ball.r) { ball.y = ball.r; ball.vy *= -0.6; }
+    if (ball.y > H - ball.r) { ball.y = H - ball.r; ball.vy *= -0.6; }
+    if (ball.x < ball.r) { ball.x = ball.r; ball.vx *= -0.6; }
+    // right side handled by goal check below
+
+    // defender AI: chase ball
+    const ddx = ball.x - defender.x, ddy = ball.y - defender.y;
+    const ddist = Math.hypot(ddx, ddy);
+    if (ddist > 1) {
+      defender.x += (ddx / ddist) * defender.speed * dt;
+      defender.y += (ddy / ddist) * defender.speed * dt;
+    }
+    const dToBall = Math.hypot(ball.x - defender.x, ball.y - defender.y);
+    if (dToBall < defender.r + ball.r && !possessing) {
+      const angle = Math.atan2(defender.y - H/2, defender.x - 160) + Math.PI; // clear back toward player's side
+      ball.vx = Math.cos(angle) * 300 + rand(-40,40);
+      ball.vy = Math.sin(angle) * 300 + rand(-40,40);
+    }
+
+    // goalie AI: track ball y, stay near goal line
+    const targetGY = clamp(ball.y, H/2 - GOAL_HALF + 10, H/2 + GOAL_HALF - 10);
+    goalie.y += (targetGY - goalie.y) * Math.min(1, dt * 4);
+    goalie.x = GOAL_X - 18;
+
+    const gDist = Math.hypot(ball.x - goalie.x, ball.y - goalie.y);
+    if (gDist < goalie.r + ball.r) {
+      ball.vx = -Math.abs(ball.vx) - 200;
+      ball.vy = rand(-150, 150);
+      ball.x = goalie.x - goalie.r - ball.r - 2;
+      showMessage('선방!', '#4fc3f7');
+    }
+
+    // goal check
+    if (ball.x + ball.r >= GOAL_X && Math.abs(ball.y - H/2) < GOAL_HALF) {
+      score++;
+      showMessage('GOAL!', '#ffd54f');
+      resetPositions(true);
+    }
+    if (ball.x > W + 20) {
+      resetPositions(false);
+    }
+
+    timeLeft -= dt;
+    if (timeLeft <= 0) {
+      timeLeft = 0;
+      endGame();
+    }
+
+    scoreEl.textContent = score;
+    timeEl.textContent = Math.ceil(timeLeft);
+  }
+
+  function endGame(){
+    gameOver = true;
+    finalScoreEl.textContent = `최종 골: ${score}골`;
+    overlay.style.display = 'flex';
+  }
+
+  function drawField(){
+    ctx.fillStyle = '#2e7d32';
+    ctx.fillRect(0, 0, W, H);
+    for (let i = 0; i < W; i += 60) {
+      ctx.fillStyle = i / 60 % 2 === 0 ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)';
+      ctx.fillRect(i, 0, 60, H);
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(20, 20, W - 40, H - 40);
+    ctx.beginPath(); ctx.moveTo(W/2, 20); ctx.lineTo(W/2, H-20); ctx.stroke();
+    ctx.beginPath(); ctx.arc(W/2, H/2, 60, 0, Math.PI*2); ctx.stroke();
+
+    // goal (right)
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 5;
+    ctx.strokeRect(GOAL_X, H/2 - GOAL_HALF, 20, GOAL_HALF * 2);
+    ctx.lineWidth = 2;
+    ctx.strokeRect(GOAL_X - 30, H/2 - GOAL_HALF - 20, 50, GOAL_HALF*2 + 40);
+  }
+
+  function drawEntities(){
+    // defender
+    ctx.fillStyle = '#e53935';
+    ctx.beginPath(); ctx.arc(defender.x, defender.y, defender.r, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('DEF', defender.x, defender.y + 3);
+
+    // goalie
+    ctx.fillStyle = '#8e24aa';
+    ctx.beginPath(); ctx.arc(goalie.x, goalie.y, goalie.r, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.fillText('GK', goalie.x, goalie.y + 3);
+
+    // ball
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI*2); ctx.stroke();
+
+    // player
+    ctx.fillStyle = '#1e88e5';
+    ctx.beginPath(); ctx.arc(player.x, player.y, player.r, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(player.x, player.y);
+    ctx.lineTo(player.x + Math.cos(player.facing) * 22, player.y + Math.sin(player.facing) * 22);
+    ctx.stroke();
+  }
+
+  let last = performance.now();
+  function loop(now){
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    update(dt);
+    drawField();
+    drawEntities();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  document.getElementById('restartBtn').addEventListener('click', () => {
+    score = 0; timeLeft = 60; gameOver = false;
+    resetPositions(false);
+    overlay.style.display = 'none';
+  });
+})();
+</script>
+</body>
+</html>
